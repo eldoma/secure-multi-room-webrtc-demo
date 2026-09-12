@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 
 function App() {
@@ -9,6 +9,12 @@ function App() {
   const [roomId, setRoomId] = useState("");
   const [joinedRoom, setJoinedRoom] = useState("");
   const [peers, setPeers] = useState([]);
+
+  const [mediaReady, setMediaReady] = useState(false);
+  const [mediaError, setMediaError] = useState("");
+
+  const localVideoRef = useRef(null);
+  const localStreamRef = useRef(null);
 
   useEffect(() => {
     const newSocket = io("http://localhost:3000");
@@ -58,8 +64,55 @@ function App() {
 
     return () => {
       newSocket.disconnect();
+
+      if (localStreamRef.current) {
+        localStreamRef.current
+          .getTracks()
+          .forEach((track) => track.stop());
+      }
     };
   }, []);
+
+  const startMedia = async () => {
+    try {
+      setMediaError("");
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
+
+      localStreamRef.current = stream;
+
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+
+      setMediaReady(true);
+    } catch (error) {
+      console.error("Media access failed:", error);
+
+      setMediaError(
+        "Could not access camera or microphone. Check browser permissions."
+      );
+    }
+  };
+
+  const stopMedia = () => {
+    if (localStreamRef.current) {
+      localStreamRef.current
+        .getTracks()
+        .forEach((track) => track.stop());
+
+      localStreamRef.current = null;
+    }
+
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+    }
+
+    setMediaReady(false);
+  };
 
   const joinRoom = () => {
     const trimmedRoomId = roomId.trim();
@@ -87,7 +140,7 @@ function App() {
       style={{
         padding: "40px",
         fontFamily: "Arial",
-        maxWidth: "700px",
+        maxWidth: "900px",
         margin: "0 auto",
       }}
     >
@@ -103,6 +156,47 @@ function App() {
           Socket ID: <code>{socketId}</code>
         </p>
       )}
+
+      <div style={{ marginTop: "30px" }}>
+        <h2>Local Camera</h2>
+
+        <video
+          ref={localVideoRef}
+          autoPlay
+          playsInline
+          muted
+          style={{
+            width: "100%",
+            maxWidth: "640px",
+            backgroundColor: "#111",
+            borderRadius: "8px",
+          }}
+        />
+
+        <div style={{ marginTop: "15px" }}>
+          {!mediaReady ? (
+            <button
+              onClick={startMedia}
+              style={{ padding: "10px 16px" }}
+            >
+              Start Camera & Microphone
+            </button>
+          ) : (
+            <button
+              onClick={stopMedia}
+              style={{ padding: "10px 16px" }}
+            >
+              Stop Camera & Microphone
+            </button>
+          )}
+        </div>
+
+        {mediaError && (
+          <p style={{ color: "red" }}>
+            {mediaError}
+          </p>
+        )}
+      </div>
 
       {!joinedRoom ? (
         <div style={{ marginTop: "30px" }}>
