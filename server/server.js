@@ -39,12 +39,10 @@ io.on("connection", (socket) => {
 
     console.log(`Socket ${socket.id} joined room ${roomId}`);
 
-    // Notify existing users in the room that a new peer joined.
     socket.to(roomId).emit("peer-joined", {
       peerId: socket.id,
     });
 
-    // Tell the joining client who is already in the room.
     const room = io.sockets.adapter.rooms.get(roomId);
 
     const peers = room
@@ -55,6 +53,27 @@ io.on("connection", (socket) => {
       roomId,
       socketId: socket.id,
       peers,
+    });
+  });
+
+  socket.on("webrtc-offer", ({ target, offer }) => {
+    io.to(target).emit("webrtc-offer", {
+      from: socket.id,
+      offer,
+    });
+  });
+
+  socket.on("webrtc-answer", ({ target, answer }) => {
+    io.to(target).emit("webrtc-answer", {
+      from: socket.id,
+      answer,
+    });
+  });
+
+  socket.on("webrtc-ice-candidate", ({ target, candidate }) => {
+    io.to(target).emit("webrtc-ice-candidate", {
+      from: socket.id,
+      candidate,
     });
   });
 
