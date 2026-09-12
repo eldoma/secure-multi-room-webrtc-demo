@@ -1,28 +1,38 @@
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
+const path = require("path");
 const { Server } = require("socket.io");
 
 const app = express();
-app.use(cors());
+
+const PORT = process.env.PORT || 3000;
+
+const CLIENT_ORIGIN =
+  process.env.CLIENT_ORIGIN || "http://localhost:5173";
+
+app.use(
+  cors({
+    origin: CLIENT_ORIGIN,
+    methods: ["GET", "POST"],
+  })
+);
 
 const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:5173",
+    origin: CLIENT_ORIGIN,
     methods: ["GET", "POST"],
   },
-});
-
-app.get("/", (req, res) => {
-  res.send("WebRTC signaling server is running");
 });
 
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
     service: "webrtc-signaling-server",
+    environment: process.env.NODE_ENV || "development",
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -70,12 +80,15 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("webrtc-ice-candidate", ({ target, candidate }) => {
-    io.to(target).emit("webrtc-ice-candidate", {
-      from: socket.id,
-      candidate,
-    });
-  });
+  socket.on(
+    "webrtc-ice-candidate",
+    ({ target, candidate }) => {
+      io.to(target).emit("webrtc-ice-candidate", {
+        from: socket.id,
+        candidate,
+      });
+    }
+  );
 
   socket.on("leave-room", () => {
     const roomId = socket.data.roomId;
@@ -90,7 +103,9 @@ io.on("connection", (socket) => {
       peerId: socket.id,
     });
 
-    console.log(`Socket ${socket.id} left room ${roomId}`);
+    console.log(
+      `Socket ${socket.id} left room ${roomId}`
+    );
 
     socket.data.roomId = null;
   });
@@ -108,8 +123,53 @@ io.on("connection", (socket) => {
   });
 });
 
-const PORT = 3000;
+/*
+ * Production React build
+ *
+ * Expected structure:
+ *
+ * Secure-WebRTC-Demo/
+ * ├── client/
+ * │   └── dist/
+ * └── server/
+ *     └── server.js
+ */
+const clientDistPath = path.join(
+  __dirname,
+  "..",
+  "client",
+  "dist"
+);
+
+if (process.env.NODE_ENV === "production") {
+  app.use(express.static(clientDistPath));
+
+  // SPA fallback for Express 5.
+  app.use((req, res) => {
+    res.sendFile(
+      path.join(clientDistPath, "index.html")
+    );
+  });
+} else {
+  app.get("/", (req, res) => {
+    res.send(
+      "WebRTC signaling server is running"
+    );
+  });
+}
 
 server.listen(PORT, () => {
-  console.log(`Signaling server running on http://localhost:${PORT}`);
+  console.log(
+    `WebRTC server running on port ${PORT}`
+  );
+
+  console.log(
+    `Environment: ${
+      process.env.NODE_ENV || "development"
+    }`
+  );
+
+  console.log(
+    `Allowed client origin: ${CLIENT_ORIGIN}`
+  );
 });
