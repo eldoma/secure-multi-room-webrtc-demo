@@ -1,30 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import { io } from "socket.io-client";
+import { useRef, useState } from "react";
+import { MeteredPeer } from "@metered-ca/realtime";
 
-const SIGNALING_URL =
-  import.meta.env.VITE_SIGNALING_URL;
-
-const TURN_URL =
-  import.meta.env.VITE_TURN_URL;
-
-const TURN_USERNAME =
-  import.meta.env.VITE_TURN_USERNAME;
-
-const TURN_CREDENTIAL =
-  import.meta.env.VITE_TURN_CREDENTIAL;
-
-const ICE_SERVERS = {
-  iceServers: [
-    {
-      urls: "stun:stun.l.google.com:19302",
-    },
-    {
-      urls: TURN_URL,
-      username: TURN_USERNAME,
-      credential: TURN_CREDENTIAL,
-    },
-  ],
-};
+const METERED_API_KEY =
+  import.meta.env.VITE_METERED_API_KEY;
 
 const DEFAULT_BACKGROUND = "#15171c";
 
@@ -42,9 +20,8 @@ const ROOM_BACKGROUNDS = [
 ];
 
 function App() {
-  const [socket, setSocket] = useState(null);
   const [connected, setConnected] = useState(false);
-  const [socketId, setSocketId] = useState("");
+  const [peerId, setPeerId] = useState("");
 
   const [roomId, setRoomId] = useState("");
   const [joinedRoom, setJoinedRoom] = useState("");
@@ -64,13 +41,11 @@ function App() {
   const remoteVideoRef = useRef(null);
 
   const localStreamRef = useRef(null);
+  const meteredPeerRef = useRef(null);
 
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
   const micAnimationRef = useRef(null);
-
-  const peerConnectionsRef = useRef(new Map());
-  const pendingIceCandidatesRef = useRef(new Map());
 
   const getRandomRoomBackground = () => {
     return ROOM_BACKGROUNDS[
@@ -118,7 +93,8 @@ function App() {
     }
 
     const analyser = audioContext.createAnalyser();
-    const source = audioContext.createMediaStreamSource(stream);
+    const source =
+      audioContext.createMediaStreamSource(stream);
 
     analyser.fftSize = 256;
     analyser.smoothingTimeConstant = 0.8;
@@ -155,468 +131,20 @@ function App() {
     updateMeter();
   };
 
-  const addPendingIceCandidates = async (
-    peerId,
-    peerConnection
-  ) => {
-    const pendingCandidates =
-      pendingIceCandidatesRef.current.get(peerId) || [];
-
-    for (const candidate of pendingCandidates) {
-      try {
-        await peerConnection.addIceCandidate(candidate);
-      } catch (error) {
-        console.error(
-          "Failed to add queued ICE candidate:",
-          error
-        );
-      }
-    }
-
-    pendingIceCandidatesRef.current.delete(peerId);
-  };
-
-  const createPeerConnection = (
-    peerId,
-    activeSocket
-  ) => {
-    if (peerConnectionsRef.current.has(peerId)) {
-      return peerConnectionsRef.current.get(peerId);
-    }
-
-    console.log(
-      "Creating RTCPeerConnection for:",
-      peerId
-    );
-
-    const peerConnection =
-      new RTCPeerConnection(ICE_SERVERS);
-
-    peerConnectionsRef.current.set(
-      peerId,
-      peerConnection
-    );
-
-    if (localStreamRef.current) {
-      localStreamRef.current
-        .getTracks()
-        .forEach((track) => {
-          peerConnection.addTrack(
-            track,
-            localStreamRef.current
-          );
-        });
-    }
-
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        activeSocket.emit(
-          "webrtc-ice-candidate",
-          {
-            target: peerId,
-            candidate: event.candidate,
-          }
-        );
-      }
-    };
-
-    peerConnection.ontrack = (event) => {
-      console.log(
-        "Remote track received from:",
-        peerId
-      );
-
-      const remoteStream = event.streams[0];
-
-      if (
-        remoteVideoRef.current &&
-        remoteStream
-      ) {
-        remoteVideoRef.current.srcObject =
-          remoteStream;
-      }
-    };
-
-    peerConnection.onconnectionstatechange = () => {
-      console.log(
-        `Peer ${peerId} connection state:`,
-        peerConnection.connectionState
-      );
-
-      setPeerConnectionState(
-        peerConnection.connectionState
-      );
-
-      if (
-        peerConnection.connectionState === "failed" ||
-        peerConnection.connectionState === "closed"
-      ) {
-        peerConnection.close();
-
-        peerConnectionsRef.current.delete(
-          peerId
-        );
-      }
-    };
-
-    peerConnection.oniceconnectionstatechange = () => {
-      console.log(
-        `Peer ${peerId} ICE state:`,
-        peerConnection.iceConnectionState
-      );
-    };
-
-    return peerConnection;
-  };
-
-  useEffect(() => {
-    const newSocket = io(
-      SIGNALING_URL
-    );
-
-    setSocket(newSocket);
-
-    newSocket.on("connect", () => {
-      console.log(
-        "Connected:",
-        newSocket.id
-      );
-
-      setConnected(true);
-      setSocketId(newSocket.id);
-    });
-
-    newSocket.on("disconnect", () => {
-      setConnected(false);
-      setSocketId("");
-      setJoinedRoom("");
-      setPeers([]);
-
-      setRoomBackground(
-        DEFAULT_BACKGROUND
-      );
-
-      setPeerConnectionState(
-        "Disconnected"
-      );
-
-      peerConnectionsRef.current.forEach(
-        (peerConnection) => {
-          peerConnection.close();
-        }
-      );
-
-      peerConnectionsRef.current.clear();
-    });
-
-    newSocket.on(
-      "room-joined",
-      async ({ roomId, peers }) => {
-        console.log(
-          "Joined room:",
-          roomId
-        );
-
-        console.log(
-          "Existing peers:",
-          peers
-        );
-
-        setJoinedRoom(roomId);
-        setPeers(peers);
-
-        // Randomize background every successful room join.
-        setRoomBackground(
-          getRandomRoomBackground()
-        );
-
-        for (const peerId of peers) {
-          const peerConnection =
-            createPeerConnection(
-              peerId,
-              newSocket
-            );
-
-          try {
-            const offer =
-              await peerConnection.createOffer();
-
-            await peerConnection.setLocalDescription(
-              offer
-            );
-
-            newSocket.emit(
-              "webrtc-offer",
-              {
-                target: peerId,
-                offer:
-                  peerConnection.localDescription,
-              }
-            );
-
-            console.log(
-              "Offer sent to:",
-              peerId
-            );
-          } catch (error) {
-            console.error(
-              "Failed to create WebRTC offer:",
-              error
-            );
-          }
-        }
-      }
-    );
-
-    newSocket.on(
-      "peer-joined",
-      ({ peerId }) => {
-        console.log(
-          "Peer joined:",
-          peerId
-        );
-
-        setPeers(
-          (currentPeers) => {
-            if (
-              currentPeers.includes(peerId)
-            ) {
-              return currentPeers;
-            }
-
-            return [
-              ...currentPeers,
-              peerId,
-            ];
-          }
-        );
-      }
-    );
-
-    newSocket.on(
-      "peer-left",
-      ({ peerId }) => {
-        console.log(
-          "Peer left:",
-          peerId
-        );
-
-        setPeers(
-          (currentPeers) =>
-            currentPeers.filter(
-              (id) => id !== peerId
-            )
-        );
-
-        const peerConnection =
-          peerConnectionsRef.current.get(
-            peerId
-          );
-
-        if (peerConnection) {
-          peerConnection.close();
-
-          peerConnectionsRef.current.delete(
-            peerId
-          );
-        }
-
-        pendingIceCandidatesRef.current.delete(
-          peerId
-        );
-
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject =
-            null;
-        }
-
-        setPeerConnectionState(
-          "Peer left"
-        );
-      }
-    );
-
-    newSocket.on(
-      "webrtc-offer",
-      async ({ from, offer }) => {
-        console.log(
-          "WebRTC offer received from:",
-          from
-        );
-
-        try {
-          const peerConnection =
-            createPeerConnection(
-              from,
-              newSocket
-            );
-
-          await peerConnection.setRemoteDescription(
-            new RTCSessionDescription(
-              offer
-            )
-          );
-
-          await addPendingIceCandidates(
-            from,
-            peerConnection
-          );
-
-          const answer =
-            await peerConnection.createAnswer();
-
-          await peerConnection.setLocalDescription(
-            answer
-          );
-
-          newSocket.emit(
-            "webrtc-answer",
-            {
-              target: from,
-              answer:
-                peerConnection.localDescription,
-            }
-          );
-
-          console.log(
-            "WebRTC answer sent to:",
-            from
-          );
-        } catch (error) {
-          console.error(
-            "Failed to process WebRTC offer:",
-            error
-          );
-        }
-      }
-    );
-
-    newSocket.on(
-      "webrtc-answer",
-      async ({ from, answer }) => {
-        console.log(
-          "WebRTC answer received from:",
-          from
-        );
-
-        const peerConnection =
-          peerConnectionsRef.current.get(
-            from
-          );
-
-        if (!peerConnection) {
-          return;
-        }
-
-        try {
-          await peerConnection.setRemoteDescription(
-            new RTCSessionDescription(
-              answer
-            )
-          );
-
-          await addPendingIceCandidates(
-            from,
-            peerConnection
-          );
-        } catch (error) {
-          console.error(
-            "Failed to process WebRTC answer:",
-            error
-          );
-        }
-      }
-    );
-
-    newSocket.on(
-      "webrtc-ice-candidate",
-      async ({
-        from,
-        candidate,
-      }) => {
-        const peerConnection =
-          peerConnectionsRef.current.get(
-            from
-          );
-
-        if (
-          peerConnection &&
-          peerConnection.remoteDescription
-        ) {
-          try {
-            await peerConnection.addIceCandidate(
-              new RTCIceCandidate(
-                candidate
-              )
-            );
-          } catch (error) {
-            console.error(
-              "Failed to add ICE candidate:",
-              error
-            );
-          }
-
-          return;
-        }
-
-        const pendingCandidates =
-          pendingIceCandidatesRef.current.get(
-            from
-          ) || [];
-
-        pendingCandidates.push(
-          new RTCIceCandidate(
-            candidate
-          )
-        );
-
-        pendingIceCandidatesRef.current.set(
-          from,
-          pendingCandidates
-        );
-      }
-    );
-
-    return () => {
-      newSocket.disconnect();
-
-      peerConnectionsRef.current.forEach(
-        (peerConnection) => {
-          peerConnection.close();
-        }
-      );
-
-      peerConnectionsRef.current.clear();
-
-      stopMicMeter();
-
-      if (localStreamRef.current) {
-        localStreamRef.current
-          .getTracks()
-          .forEach((track) =>
-            track.stop()
-          );
-      }
-    };
-  }, []);
-
   const startMedia = async () => {
     try {
       setMediaError("");
 
       const stream =
-        await navigator.mediaDevices.getUserMedia(
-          {
-            video: true,
-            audio: true,
-          }
-        );
+        await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true,
+        });
 
       localStreamRef.current = stream;
 
       if (localVideoRef.current) {
-        localVideoRef.current.srcObject =
-          stream;
+        localVideoRef.current.srcObject = stream;
       }
 
       await startMicMeter(stream);
@@ -640,65 +168,172 @@ function App() {
     if (localStreamRef.current) {
       localStreamRef.current
         .getTracks()
-        .forEach((track) =>
-          track.stop()
-        );
+        .forEach((track) => track.stop());
 
       localStreamRef.current = null;
     }
 
     if (localVideoRef.current) {
-      localVideoRef.current.srcObject =
-        null;
+      localVideoRef.current.srcObject = null;
     }
 
     setMediaReady(false);
   };
 
-  const joinRoom = () => {
-    const trimmedRoomId =
-      roomId.trim();
+  const joinRoom = async () => {
+    const trimmedRoomId = roomId.trim();
 
     if (
-      !socket ||
-      !connected ||
       !trimmedRoomId ||
-      !mediaReady
+      !mediaReady ||
+      !localStreamRef.current
     ) {
       return;
     }
 
-    socket.emit(
-      "join-room",
-      trimmedRoomId
-    );
+    try {
+      setPeerConnectionState("Connecting");
+      setPeers([]);
+
+      const meteredPeer = new MeteredPeer({
+        apiKey: METERED_API_KEY,
+      });
+
+      meteredPeerRef.current = meteredPeer;
+
+      meteredPeer.on(
+        "peer-joined",
+        ({ peer: remote }) => {
+          console.log(
+            "Metered peer joined:",
+            remote.id
+          );
+
+          setPeers((currentPeers) => {
+            if (currentPeers.includes(remote.id)) {
+              return currentPeers;
+            }
+
+            return [
+              ...currentPeers,
+              remote.id,
+            ];
+          });
+
+          remote.on(
+            "track",
+            ({ streams }) => {
+              console.log(
+                "Remote media received:",
+                remote.id
+              );
+
+              if (
+                remoteVideoRef.current &&
+                streams &&
+                streams[0]
+              ) {
+                remoteVideoRef.current.srcObject =
+                  streams[0];
+
+                setPeerConnectionState(
+                  "connected"
+                );
+              }
+            }
+          );
+        }
+      );
+
+      meteredPeer.on(
+        "peer-left",
+        ({ peer: remote }) => {
+          console.log(
+            "Metered peer left:",
+            remote.id
+          );
+
+          setPeers((currentPeers) =>
+            currentPeers.filter(
+              (id) => id !== remote.id
+            )
+          );
+
+          if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject =
+              null;
+          }
+
+          setPeerConnectionState(
+            "Peer left"
+          );
+        }
+      );
+
+      meteredPeer.addStream(
+        localStreamRef.current
+      );
+
+      await meteredPeer.join(
+        trimmedRoomId
+      );
+
+      setConnected(true);
+      setJoinedRoom(trimmedRoomId);
+
+      /*
+       * Metered assigns the browser peer ID.
+       * Some SDK versions expose it after join.
+       */
+      if (meteredPeer.id) {
+        setPeerId(meteredPeer.id);
+      }
+
+      setRoomBackground(
+        getRandomRoomBackground()
+      );
+
+      console.log(
+        "Joined Metered room:",
+        trimmedRoomId
+      );
+    } catch (error) {
+      console.error(
+        "Failed to join Metered room:",
+        error
+      );
+
+      setConnected(false);
+      setPeerConnectionState(
+        "Connection failed"
+      );
+    }
   };
 
-  const leaveRoom = () => {
-    if (
-      !socket ||
-      !joinedRoom
-    ) {
-      return;
-    }
+  const leaveRoom = async () => {
+    const meteredPeer =
+      meteredPeerRef.current;
 
-    socket.emit("leave-room");
-
-    peerConnectionsRef.current.forEach(
-      (peerConnection) => {
-        peerConnection.close();
+    if (meteredPeer) {
+      try {
+        await meteredPeer.close();
+      } catch (error) {
+        console.error(
+          "Failed to close Metered connection:",
+          error
+        );
       }
-    );
 
-    peerConnectionsRef.current.clear();
-
-    pendingIceCandidatesRef.current.clear();
+      meteredPeerRef.current = null;
+    }
 
     if (remoteVideoRef.current) {
       remoteVideoRef.current.srcObject =
         null;
     }
 
+    setConnected(false);
+    setPeerId("");
     setJoinedRoom("");
     setPeers([]);
 
@@ -730,7 +365,7 @@ function App() {
       </h1>
 
       <p>
-        Signaling server:{" "}
+        Metered signaling:{" "}
         <strong>
           {connected
             ? "Connected"
@@ -738,11 +373,11 @@ function App() {
         </strong>
       </p>
 
-      {socketId && (
+      {peerId && (
         <p>
-          Socket ID:{" "}
+          Peer ID:{" "}
           <code>
-            {socketId}
+            {peerId}
           </code>
         </p>
       )}
@@ -819,9 +454,7 @@ function App() {
       >
         {!mediaReady ? (
           <button
-            onClick={
-              startMedia
-            }
+            onClick={startMedia}
             style={{
               padding:
                 "10px 16px",
@@ -832,9 +465,7 @@ function App() {
           </button>
         ) : (
           <button
-            onClick={
-              stopMedia
-            }
+            onClick={stopMedia}
             style={{
               padding:
                 "10px 16px",
@@ -923,12 +554,9 @@ function App() {
             type="text"
             value={roomId}
             placeholder="Enter room ID"
-            onChange={(
-              event
-            ) =>
+            onChange={(event) =>
               setRoomId(
-                event.target
-                  .value
+                event.target.value
               )
             }
             style={{
@@ -942,13 +570,8 @@ function App() {
           />
 
           <button
-            onClick={
-              joinRoom
-            }
-            disabled={
-              !connected ||
-              !mediaReady
-            }
+            onClick={joinRoom}
+            disabled={!mediaReady}
             style={{
               padding:
                 "10px 16px",
@@ -970,26 +593,24 @@ function App() {
           </h2>
 
           <p>
-            Other peers in
-            room:{" "}
+            Other peers in room:{" "}
             <strong>
               {peers.length}
             </strong>
           </p>
 
-          {peers.length >
-            0 && (
+          {peers.length > 0 && (
             <ul>
               {peers.map(
-                (peerId) => (
+                (remotePeerId) => (
                   <li
                     key={
-                      peerId
+                      remotePeerId
                     }
                   >
                     <code>
                       {
-                        peerId
+                        remotePeerId
                       }
                     </code>
                   </li>
@@ -999,9 +620,7 @@ function App() {
           )}
 
           <button
-            onClick={
-              leaveRoom
-            }
+            onClick={leaveRoom}
             style={{
               padding:
                 "10px 16px",
