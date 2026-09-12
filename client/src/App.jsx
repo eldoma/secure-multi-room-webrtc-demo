@@ -1,15 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 
+const SIGNALING_URL =
+  import.meta.env.VITE_SIGNALING_URL;
+
+const TURN_URL =
+  import.meta.env.VITE_TURN_URL;
+
+const TURN_USERNAME =
+  import.meta.env.VITE_TURN_USERNAME;
+
+const TURN_CREDENTIAL =
+  import.meta.env.VITE_TURN_CREDENTIAL;
+
 const ICE_SERVERS = {
   iceServers: [
     {
       urls: "stun:stun.l.google.com:19302",
     },
     {
-      urls: "turn:172.26.12.60:3478?transport=udp",
-      username: "webrtc",
-      credential: "demo12345",
+      urls: TURN_URL,
+      username: TURN_USERNAME,
+      credential: TURN_CREDENTIAL,
     },
   ],
 };
@@ -259,7 +271,7 @@ function App() {
 
   useEffect(() => {
     const newSocket = io(
-      "http://localhost:3000"
+      SIGNALING_URL
     );
 
     setSocket(newSocket);
