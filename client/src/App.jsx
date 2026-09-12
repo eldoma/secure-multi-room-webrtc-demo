@@ -6,6 +6,11 @@ const ICE_SERVERS = {
     {
       urls: "stun:stun.l.google.com:19302",
     },
+    {
+      urls: "turn:172.26.12.60:3478?transport=udp",
+      username: "webrtc",
+      credential: "demo12345",
+    },
   ],
 };
 
